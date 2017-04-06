@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"github.com/clczx/learning-go/w2v/core"
@@ -26,7 +28,7 @@ type vocabWord struct {
 func initUnigramTable(wordCount core.PairList) []int {
 	vocabSize := len(wordCount)
 	sum := 0.0
-    pow := 0.75
+	pow := 0.75
 	for i := 0; i < vocabSize; i++ {
 		sum += math.Pow(float64(wordCount[i].Value), pow)
 	}
@@ -48,6 +50,10 @@ func initUnigramTable(wordCount core.PairList) []int {
 	return table
 }
 
+func createHuffmanTree() {
+
+}
+
 func parseParams() map[string]interface{} {
 	params := make(map[string]interface{})
 	train := flag.String("train", "train.txt", "path of train file")
@@ -60,6 +66,7 @@ func parseParams() map[string]interface{} {
 	alpha := flag.Float64("alpha", 0.05, "Set the starting learning rate; default is 0.025 for skip-gram and 0.05 for CBOW")
 	sample := flag.Float64("sample", 0.001, "set threshold for the occurrence of word, randomly down-sampling highly appear words")
 	cbow := flag.Bool("cbow", true, "is set CBOW method")
+	binaryFormat := flag.Bool("binary", false, "set save model format")
 
 	flag.Parse()
 
@@ -73,6 +80,7 @@ func parseParams() map[string]interface{} {
 	params["cbow"] = bool(*cbow)
 	params["minCount"] = int(*minCount)
 	params["iter"] = int(*iter)
+	params["binary"] = bool(*binaryFormat)
 	return params
 }
 
@@ -128,7 +136,7 @@ func sortVocaWords(wordCountMap map[string]int, minCount int) (core.PairList, in
 	return wordList, vocabSize
 }
 
-func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string) {
+func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string, binaryFormat bool) {
 	f, err := os.Create(outfile)
 	if err != nil {
 		fmt.Printf("save Model error %s\n", err)
@@ -147,9 +155,20 @@ func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string) {
 
 	for idx, pair := range wordList {
 		w.WriteString(pair.Key)
+		w.WriteString(" ")
+
 		for i := 0; i < vectLength; i++ {
-			s := strconv.FormatFloat(syn0Vec[idx].Values[i], 'f', -1, 64)
-			w.WriteString("\t" + s)
+			if binaryFormat {
+				buf := new(bytes.Buffer)
+				binary.Write(buf, binary.LittleEndian, float32(syn0Vec[idx].Values[i]))
+				w.Write(buf.Bytes())
+			} else {
+				s := strconv.FormatFloat(syn0Vec[idx].Values[i], 'f', -1, 64)
+				w.WriteString(s)
+				if i != vectLength-1 {
+					w.WriteString(" ")
+				}
+			}
 		}
 		w.WriteString("\n")
 	}
@@ -277,6 +296,7 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 	outputFile := params["outfile"].(string)
 	cbow := params["cbow"].(bool)
 	iter := params["iter"].(int)
+	binaryFormat := params["binary"].(bool)
 
 	syn0Vec, syn1neg := initNet(vocabSize, vecLength)
 	alpha := startAlpha
@@ -313,7 +333,7 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 					}
 					count += 1
 					cnt := wordList[idx].Value
-					if count % 10000 == 0 {
+					if count%10000 == 0 {
 						fmt.Printf("\ralpha:%f, process : %0.2f%%, local itera : %d", alpha,
 							float64(count*100)/float64(trainsCount*iter+1), iter-localIter+1)
 						alpha = startAlpha * (1.0 - float64(count)/float64(trainsCount*iter+1))
@@ -322,7 +342,7 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 						}
 					}
 					if sample > 0 {
-                        // down sampling
+						// down sampling
 						ran := (math.Sqrt(float64(cnt)/(float64(trainsCount)*sample) + 1)) * (sample * float64(trainsCount) / float64(cnt))
 						if ran < float64(r.Intn(65537))/float64(65536) {
 							continue
@@ -353,7 +373,7 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 		}
 	}
 
-	savaModel(wordList, syn0Vec, outputFile)
+	savaModel(wordList, syn0Vec, outputFile, binaryFormat)
 }
 
 func main() {

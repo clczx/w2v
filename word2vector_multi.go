@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"github.com/clczx/learning-go/w2v/core"
@@ -27,7 +29,7 @@ type vocabWord struct {
 func initUnigramTable(wordCount core.PairList) []int {
 	vocabSize := len(wordCount)
 	sum := 0.0
-    pow := 0.75
+	pow := 0.75
 	for i := 0; i < vocabSize; i++ {
 		sum += math.Pow(float64(wordCount[i].Value), pow)
 	}
@@ -62,6 +64,7 @@ func parseParams() map[string]interface{} {
 	sample := flag.Float64("sample", 0.001, "set threshold for the occurrence of word, randomly down-sampling highly appear words")
 	cbow := flag.Bool("cbow", true, "is set CBOW method")
 	threadNum := flag.Int("thread", 12, "use <int> threads, default 12")
+	binaryFormat := flag.Bool("binary", false, "set save model format")
 
 	flag.Parse()
 
@@ -76,6 +79,7 @@ func parseParams() map[string]interface{} {
 	params["minCount"] = int(*minCount)
 	params["iter"] = int(*iter)
 	params["threadNum"] = int(*threadNum)
+	params["binary"] = bool(*binaryFormat)
 	return params
 }
 
@@ -131,7 +135,7 @@ func sortVocaWords(wordCountMap map[string]int, minCount int) (core.PairList, in
 	return wordList, vocabSize
 }
 
-func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string) {
+func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string, binaryFormat bool) {
 	f, err := os.Create(outfile)
 	if err != nil {
 		fmt.Printf("save Model error %s\n", err)
@@ -150,12 +154,24 @@ func savaModel(wordList core.PairList, syn0Vec []*core.Vector, outfile string) {
 
 	for idx, pair := range wordList {
 		w.WriteString(pair.Key)
+		w.WriteString(" ")
+
 		for i := 0; i < vectLength; i++ {
-			s := strconv.FormatFloat(syn0Vec[idx].Values[i], 'f', -1, 64)
-			w.WriteString("\t" + s)
+			if binaryFormat {
+				buf := new(bytes.Buffer)
+				binary.Write(buf, binary.LittleEndian, float32(syn0Vec[idx].Values[i]))
+				w.Write(buf.Bytes())
+			} else {
+				s := strconv.FormatFloat(syn0Vec[idx].Values[i], 'f', -1, 64)
+				w.WriteString(s)
+				if i != vectLength-1 {
+					w.WriteString(" ")
+				}
+			}
 		}
 		w.WriteString("\n")
 	}
+
 	w.Flush()
 }
 
@@ -232,7 +248,6 @@ func CBOW(syn0Vec, syn1neg []*core.Vector, b, j, senLen, vecLength, negative int
 		wordIdx := sentence[pos]
 		syn0Vec[wordIdx].Sum(neu1e)
 	}
-
 }
 
 func skipGram(syn0Vec, syn1neg []*core.Vector, b, j, senLen, vecLength, negative int, alpha float64, table, sentence []int) {
@@ -281,6 +296,8 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 	cbow := params["cbow"].(bool)
 	iter := params["iter"].(int)
 	threadNum := params["threadNum"].(int)
+	binaryFormat := params["binary"].(bool)
+	fmt.Println("the iteration is ", iter)
 
 	syn0Vec, syn1neg := initNet(vocabSize, vecLength)
 	alpha := startAlpha
@@ -295,18 +312,16 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 	}
 	defer f.Close()
 
-
 	count := 0
-
 
 	for localIter > 0 {
 		var line string
-	    sentenceChan := make(chan []int, 10000)
-        resultChan := make(chan int, 100)
+		sentenceChan := make(chan []int, 10000)
+		resultChan := make(chan int, 100)
 
 		go func() {
-	        seed := rand.NewSource(time.Now().UnixNano())
-	        r := rand.New(seed)
+			seed := rand.NewSource(time.Now().UnixNano())
+			r := rand.New(seed)
 			scanner := bufio.NewScanner(f)
 			for scanner.Scan() {
 				line = scanner.Text()
@@ -346,8 +361,8 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 
 		for i := 0; i < threadNum; i++ {
 			go func() {
-	            seed := rand.NewSource(time.Now().UnixNano())
-	            r := rand.New(seed)
+				seed := rand.NewSource(time.Now().UnixNano())
+				r := rand.New(seed)
 				for sentence := range sentenceChan {
 					senLen := len(sentence)
 
@@ -377,7 +392,8 @@ func trainModel(trainFile string, vocabSize, trainsCount int, params map[string]
 		}
 	}
 
-	savaModel(wordList, syn0Vec, outputFile)
+	//savaModel(wordList, syn0Vec, outputFile)
+	savaModel(wordList, syn0Vec, outputFile, binaryFormat)
 }
 
 func main() {
